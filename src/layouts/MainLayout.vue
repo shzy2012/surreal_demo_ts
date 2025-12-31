@@ -1,63 +1,95 @@
 <template>
-  <q-layout view="lHh Lpr lFf">
-    <q-header elevated>
+  <q-layout view="hHh lpR fFf">
+
+    <q-header elevated class="bg-primary text-white">
       <q-toolbar>
-        <q-btn flat dense round icon="menu" aria-label="Menu" @click="toggleLeftDrawer" />
+        <q-btn dense flat round icon="menu" @click="toggleLeftDrawer" />
 
-        <q-toolbar-title> Quick Dev </q-toolbar-title>
+        <q-toolbar-title>
+          <!-- <q-avatar>
+            <img src="https://cdn.quasar.dev/logo-v2/svg/logo-mono-white.svg">
+          </q-avatar> -->
+          Quick Dev
+        </q-toolbar-title>
 
-        <div>Quasar v{{ $q.version }}</div>
+        <q-btn dense flat round icon="menu" @click="toggleRightDrawer" />
       </q-toolbar>
     </q-header>
 
-    <q-drawer v-model="leftDrawerOpen" show-if-above bordered>
+    <q-drawer show-if-above v-model="leftDrawerOpen" side="left" bordered>
       <q-list>
-        <q-item-label header> Essential Links </q-item-label>
+        <q-item-label header>
+          Navigation
+        </q-item-label>
 
-        <EssentialLink v-for="link in linksList" :key="link.title" v-bind="link" />
+        <EssentialLink
+          v-for="link in linksList"
+          :key="link.title"
+          v-bind="link"
+        />
       </q-list>
     </q-drawer>
+
+    <q-drawer v-model="rightDrawerOpen" side="right" bordered>
+      <!-- drawer content -->
+    </q-drawer>
+
 
     <q-page-container>
       <router-view />
     </q-page-container>
+
   </q-layout>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import EssentialLink, { type EssentialLinkProps } from 'components/EssentialLink.vue';
+import { ref } from 'vue'
+import EssentialLink, { type EssentialLinkProps } from 'components/EssentialLink.vue'
 
 const linksList: EssentialLinkProps[] = [
   {
-    title: '用户管理',
-    caption: '管理系统用户信息',
-    icon: 'people',
-    link: '/',
+    title: 'Management',
+    icon: 'admin_panel_settings',
+    children: [
+      {
+        title: 'Users',
+        icon: 'people',
+        link: '/'
+      },
+      {
+        title: 'Relations',
+        icon: 'share',
+        link: '/relations'
+      }
+    ]
   },
   {
-    title: '文章管理',
-    caption: '示例文章列表',
-    icon: 'article',
-    link: '/posts',
+    title: 'Content',
+    icon: 'library_books',
+    children: [
+      {
+        title: 'Posts',
+        icon: 'article',
+        link: '/posts'
+      }
+    ]
   },
   {
-    title: '关系图谱',
-    caption: '展示 SurrealDB 关系特性',
-    icon: 'share',
-    link: '/relations',
-  },
-  {
-    title: '系统设置',
-    caption: '配置系统参数',
+    title: 'Settings',
     icon: 'settings',
-    link: '/settings',
-  },
-];
+    link: '/settings'
+  }
+]
 
-const leftDrawerOpen = ref(false);
+const leftDrawerOpen = ref(false)
+const rightDrawerOpen = ref(false)
 
 function toggleLeftDrawer() {
-  leftDrawerOpen.value = !leftDrawerOpen.value;
+  leftDrawerOpen.value = !leftDrawerOpen.value
 }
+
+function toggleRightDrawer() {
+  rightDrawerOpen.value = !rightDrawerOpen.value
+}
+
 </script>
