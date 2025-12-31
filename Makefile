@@ -4,7 +4,7 @@ run:
 	npm run dev
 
 test:
-	npx tsx src/utils/test-example.ts
+	npm test
 
 install:
 	npm i

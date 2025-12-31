@@ -1,5 +1,5 @@
 import { boot } from 'quasar/wrappers';
-import { initSurrealDB } from 'src/utils/surreal';
+import { initSurrealDB } from 'src/models/db/surreal';
 
 export default boot(async () => {
   try {

@@ -174,9 +174,25 @@ export class SurrealService<T> {
   }
 
   /**
+   * 格式化记录，确保 id 是字符串
+   */
+  private formatRecord(record: unknown): T {
+    if (record && typeof record === 'object' && 'id' in record) {
+      const r = record as Record<string, unknown>;
+      if (typeof r.id === 'object' && r.id !== null && 'id' in r.id && 'tb' in r.id) {
+        const rid = r.id as { tb: string; id: string };
+        r.id = `${rid.tb}:${rid.id}`;
+      } else {
+        r.id = String(r.id);
+      }
+    }
+    return record as T;
+  }
+
+  /**
    * 创建记录
    */
-  async create(data: T): Promise<T> {
+  async add(data: T): Promise<T> {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = await (this.db.create as (table: string, data: any) => Promise<T | T[]>)(
@@ -187,7 +203,7 @@ export class SurrealService<T> {
       if (!records[0]) {
         throw new Error('创建记录失败：未返回结果');
       }
-      return records[0] as T;
+      return this.formatRecord(records[0]);
     } catch (error) {
       console.error(`创建 ${this.table} 记录失败:`, error);
       throw error;
@@ -197,9 +213,9 @@ export class SurrealService<T> {
   /**
    * 创建多条记录
    */
-  async createMany(dataArray: T[]): Promise<T[]> {
+  async addMany(dataArray: T[]): Promise<T[]> {
     try {
-      const results = await Promise.all(dataArray.map((data) => this.create(data)));
+      const results = await Promise.all(dataArray.map((data) => this.add(data)));
       return results;
     } catch (error) {
       console.error(`批量创建 ${this.table} 记录失败:`, error);
@@ -220,9 +236,22 @@ export class SurrealService<T> {
       const idStr = String(id);
       // 如果 ID 已经包含表名（格式为 table:id），直接使用；否则添加表名
       const recordId = idStr.includes(':') ? idStr : `${this.table}:${idStr}`;
-      const result = await (this.db.select as (id: string) => Promise<T | T[]>)(recordId);
-      const records = Array.isArray(result) ? result : [result];
-      return (records[0] as T) || null;
+
+      // 使用 db.query 替代 db.select 以获得更一致的结果结构
+      const query = `SELECT * FROM ${recordId}`;
+      const result = await this.db.query<unknown[]>(query);
+
+      const firstResult = result[0];
+      if (firstResult && typeof firstResult === 'object') {
+        if ('result' in firstResult) {
+          const records = (firstResult.result as unknown[]) || [];
+          return records[0] ? this.formatRecord(records[0]) : null;
+        }
+        if (Array.isArray(firstResult)) {
+          return firstResult[0] ? this.formatRecord(firstResult[0]) : null;
+        }
+      }
+      return null;
     } catch (error) {
       console.error(`查询 ${this.table}:${id} 失败:`, error);
       return null;
@@ -250,11 +279,27 @@ export class SurrealService<T> {
       const whereClause = this.buildWhereClause(conditions);
       const query = `SELECT * FROM ${this.table} WHERE ${whereClause}`;
       const result = await this.db.query<unknown[]>(query);
+
+      // SurrealDB query returns an array of results for each statement
       const firstResult = result[0];
-      if (firstResult && typeof firstResult === 'object' && 'result' in firstResult) {
-        return (firstResult.result as T[]) || [];
+      if (firstResult && typeof firstResult === 'object') {
+        // In newer SurrealDB JS versions, the result is directly the data or inside a result property
+        if ('result' in firstResult) {
+          const records = (firstResult.result as unknown[]) || [];
+          return records.map((r) => this.formatRecord(r));
+        }
+        if ('status' in firstResult && (firstResult as { status: string }).status === 'ERR') {
+          const errRes = firstResult as { detail?: string; message?: string };
+          console.error(`SurrealDB Query Error: ${errRes.detail || errRes.message}`);
+          return [];
+        }
+        // If it's an array, it might be the result directly
+        if (Array.isArray(firstResult)) {
+          return firstResult.map((r) => this.formatRecord(r));
+        }
       }
-      return [];
+      const finalResult = result || [];
+      return finalResult.map((r) => this.formatRecord(r));
     } catch (error) {
       console.error(`条件查询 ${this.table} 失败:`, error);
       throw error;
@@ -302,15 +347,32 @@ export class SurrealService<T> {
       const idStr = String(id);
       // 如果 ID 已经包含表名（格式为 table:id），直接使用；否则添加表名
       const recordId = idStr.includes(':') ? idStr : `${this.table}:${idStr}`;
-      const result = await (this.db.update as (id: string, data: Partial<T>) => Promise<T | T[]>)(
-        recordId,
-        data,
-      );
-      const records = Array.isArray(result) ? result : [result];
-      if (!records[0]) {
-        throw new Error(`更新记录失败：记录 ${recordId} 不存在`);
+
+      const updateData = Object.entries(data)
+        .map(([key, value]) => `${key} = ${JSON.stringify(value)}`)
+        .join(', ');
+
+      const query = `UPDATE ${recordId} SET ${updateData} RETURN AFTER`;
+      const result = await this.db.query<unknown[]>(query);
+
+      const firstResult = result[0];
+      if (firstResult && typeof firstResult === 'object') {
+        if ('result' in firstResult) {
+          const records = (firstResult.result as unknown[]) || [];
+          if (records.length === 0) {
+            throw new Error(`更新记录失败：记录 ${recordId} 不存在`);
+          }
+          return this.formatRecord(records[0]);
+        }
+        if (Array.isArray(firstResult)) {
+          if (firstResult.length === 0) {
+            throw new Error(`更新记录失败：记录 ${recordId} 不存在`);
+          }
+          return this.formatRecord(firstResult[0]);
+        }
       }
-      return records[0] as T;
+
+      throw new Error(`更新记录失败：记录 ${recordId} 不存在`);
     } catch (error) {
       console.error(`更新 ${this.table}:${id} 失败:`, error);
       throw error;
@@ -342,8 +404,14 @@ export class SurrealService<T> {
       const query = `UPDATE ${this.table} SET ${updateData} WHERE ${whereClause} RETURN AFTER`;
       const result = await this.db.query<unknown[]>(query);
       const firstResult = result[0];
-      if (firstResult && typeof firstResult === 'object' && 'result' in firstResult) {
-        return (firstResult.result as T[]) || [];
+      if (firstResult && typeof firstResult === 'object') {
+        if ('result' in firstResult) {
+          const records = (firstResult.result as unknown[]) || [];
+          return records.map((r) => this.formatRecord(r));
+        }
+        if (Array.isArray(firstResult)) {
+          return firstResult.map((r) => this.formatRecord(r));
+        }
       }
       return [];
     } catch (error) {
@@ -361,7 +429,7 @@ export class SurrealService<T> {
       if (existing) {
         return await this.update(id, data);
       } else {
-        return await this.create({ ...data } as T);
+        return await this.add({ ...data } as T);
       }
     } catch (error) {
       console.error(`Upsert ${this.table}:${id} 失败:`, error);
@@ -382,10 +450,27 @@ export class SurrealService<T> {
       const idStr = String(id);
       // 如果 ID 已经包含表名（格式为 table:id），直接使用；否则添加表名
       const recordId = idStr.includes(':') ? idStr : `${this.table}:${idStr}`;
-      await this.db.delete(recordId);
+
+      // 使用 db.query 执行 DELETE 以获得更可靠的行为
+      const query = `DELETE ${recordId}`;
+      await this.db.query(query);
       return true;
     } catch (error) {
       console.error(`删除 ${this.table}:${id} 失败:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * 删除表中所有数据
+   */
+  async deleteAll(): Promise<boolean> {
+    try {
+      const query = `DELETE FROM ${this.table}`;
+      await this.db.query(query);
+      return true;
+    } catch (error) {
+      console.error(`删除所有 ${this.table} 记录失败:`, error);
       return false;
     }
   }
@@ -436,11 +521,22 @@ export class SurrealService<T> {
       const result = vars
         ? await this.db.query<unknown[]>(queryStr, vars)
         : await this.db.query<unknown[]>(queryStr);
+
       const firstResult = result[0];
-      if (firstResult && typeof firstResult === 'object' && 'result' in firstResult) {
-        return firstResult.result as R;
+      if (firstResult && typeof firstResult === 'object') {
+        if ('result' in firstResult) {
+          return firstResult.result as R;
+        }
+        if ('status' in firstResult && (firstResult as { status: string }).status === 'ERR') {
+          const errRes = firstResult as { detail?: string; message?: string };
+          console.error(`SurrealDB Query Error: ${errRes.detail || errRes.message}`);
+          return [] as unknown as R;
+        }
+        if (Array.isArray(firstResult)) {
+          return firstResult as unknown as R;
+        }
       }
-      return [] as unknown as R;
+      return result as unknown as R;
     } catch (error) {
       console.error(`执行查询失败:`, error);
       throw error;
@@ -455,15 +551,28 @@ export class SurrealService<T> {
       let query: string;
       if (conditions) {
         const whereClause = this.buildWhereClause(conditions);
-        query = `SELECT count() FROM ${this.table} WHERE ${whereClause}`;
+        query = `SELECT count() FROM ${this.table} WHERE ${whereClause} GROUP ALL`;
       } else {
-        query = `SELECT count() FROM ${this.table}`;
+        query = `SELECT count() FROM ${this.table} GROUP ALL`;
       }
       const result = await this.db.query<unknown[]>(query);
       const firstResult = result[0];
-      if (firstResult && typeof firstResult === 'object' && 'result' in firstResult) {
-        const countResult = firstResult.result as Array<{ count: number }>;
-        return countResult[0]?.count || 0;
+      if (firstResult && typeof firstResult === 'object') {
+        let data: unknown[] = [];
+        if ('result' in firstResult) {
+          data = (firstResult.result as unknown[]) || [];
+        } else if (Array.isArray(firstResult)) {
+          data = firstResult;
+        }
+
+        if (
+          data.length > 0 &&
+          data[0] !== null &&
+          typeof data[0] === 'object' &&
+          'count' in data[0]
+        ) {
+          return (data[0] as { count: number }).count || 0;
+        }
       }
       return 0;
     } catch (error) {
@@ -504,8 +613,14 @@ export class SurrealService<T> {
 
       const firstResult = dataResult[0];
       let data: T[] = [];
-      if (firstResult && typeof firstResult === 'object' && 'result' in firstResult) {
-        data = (firstResult.result as T[]) || [];
+      if (firstResult && typeof firstResult === 'object') {
+        if ('result' in firstResult) {
+          data = (firstResult.result as T[]) || [];
+        } else if (Array.isArray(firstResult)) {
+          data = firstResult as T[];
+        }
+      } else if (Array.isArray(dataResult)) {
+        data = dataResult as T[];
       }
 
       const totalPages = Math.ceil(countResult / pageSize);

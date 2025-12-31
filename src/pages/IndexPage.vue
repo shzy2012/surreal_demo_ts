@@ -9,6 +9,9 @@
         <q-btn flat round dense icon="add" @click="openAddDialog">
           <q-tooltip>添加用户</q-tooltip>
         </q-btn>
+        <q-btn flat round dense color="white" icon="delete_sweep" @click="deleteAllUsers" :disable="users.length === 0">
+          <q-tooltip>删除所有</q-tooltip>
+        </q-btn>
       </q-toolbar>
     </div>
 
@@ -17,7 +20,7 @@
       :columns="columns"
       :loading="loading"
       row-key="id"
-      :pagination="pagination"
+      v-model:pagination="pagination"
       @request="onRequest"
       class="my-sticky-header-table"
     >
@@ -91,11 +94,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { useQuasar } from 'quasar';
-import { SurrealService, isSurrealDBInitialized } from 'src/utils/surreal';
-import type { User } from 'src/models/models';
-
+import { isSurrealDBInitialized } from 'src/models/db/surreal';
+import { User } from 'src/models/UserModel';
 const $q = useQuasar();
-const userService = new SurrealService<User>('user');
 
 const users = ref<User[]>([]);
 const loading = ref(false);
@@ -172,20 +173,20 @@ async function loadUsers(): Promise<void> {
 
   loading.value = true;
   try {
-    // 使用 findAll 获取所有数据
-    const allUsers = await userService.findAll();
-    console.log('获取到的用户数据:', allUsers);
-
-    if (allUsers && allUsers.length > 0) {
-      // 客户端分页
-      const start = (pagination.value.page - 1) * pagination.value.rowsPerPage;
-      const end = start + pagination.value.rowsPerPage;
-      users.value = allUsers.slice(start, end);
-      pagination.value.rowsNumber = allUsers.length;
-    } else {
-      users.value = [];
-      pagination.value.rowsNumber = 0;
-    }
+    // 使用模型静态接口的分页方法获取数据
+    const result = await User.query.paginate(
+      pagination.value.page,
+      pagination.value.rowsPerPage
+    );
+    
+    console.log('分页查询结果:', result);
+    
+    // 重要：将纯 JS 对象转换为 User 类实例，以支持 Active Record 方法（如 .delete()）
+    users.value = result.data.map((data) => new User(data));
+    pagination.value.rowsNumber = result.total;
+    
+    console.log('更新后的 pagination:', pagination.value);
+    console.log('获取到的用户数据 (实例):', users.value);
   } catch (error) {
     console.error('加载用户失败:', error);
     const errorMessage =
@@ -240,25 +241,21 @@ async function saveUser() {
 
   saving.value = true;
   try {
-    if (editingUser.value?.id) {
-      // 更新
-      await userService.update(editingUser.value.id, {
-        name: userForm.value.name,
-        email: userForm.value.email,
-        age: userForm.value.age,
-      });
+    if (editingUser.value) {
+      // 1. 使用 Active Record 模式进行更新
+      Object.assign(editingUser.value, userForm.value);
+      await editingUser.value.update();
+      
       $q.notify({
         type: 'positive',
         message: '更新成功',
         position: 'top',
       });
     } else {
-      // 创建
-      await userService.create({
-        name: userForm.value.name,
-        email: userForm.value.email,
-        age: userForm.value.age,
-      });
+      // 2. 使用 Active Record 模式进行创建
+      const newUser = new User(userForm.value);
+      await newUser.add();
+      
       $q.notify({
         type: 'positive',
         message: '创建成功',
@@ -292,7 +289,8 @@ function deleteUser(user: User) {
   }).onOk(() => {
     void (async () => {
       try {
-        await userService.delete(user.id!);
+        // 使用 Active Record 模式进行删除
+        await user.delete();
         $q.notify({
           type: 'positive',
           message: '删除成功',
@@ -306,6 +304,46 @@ function deleteUser(user: User) {
           message: '删除用户失败',
           position: 'top',
         });
+      }
+    })();
+  });
+}
+
+// 删除所有用户
+function deleteAllUsers() {
+  $q.dialog({
+    title: '确认删除所有',
+    message: '确定要删除所有用户吗？此操作不可撤销！',
+    cancel: {
+      color: 'primary',
+      flat: true
+    },
+    ok: {
+      color: 'negative',
+      label: '确定删除'
+    },
+    persistent: true,
+  }).onOk(() => {
+    void (async () => {
+      loading.value = true;
+      try {
+        await User.query.deleteAll();
+        $q.notify({
+          type: 'positive',
+          message: '已成功删除所有用户',
+          position: 'top',
+        });
+        pagination.value.page = 1;
+        await loadUsers();
+      } catch (error) {
+        console.error('删除所有用户失败:', error);
+        $q.notify({
+          type: 'negative',
+          message: '删除所有用户失败',
+          position: 'top',
+        });
+      } finally {
+        loading.value = false;
       }
     })();
   });
